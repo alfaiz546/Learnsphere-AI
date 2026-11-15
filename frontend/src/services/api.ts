@@ -9,7 +9,7 @@ function getCookie(name: string): string | null {
 }
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: 'https://learnsphere-ai-o2lz.onrender.com/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -99,3 +99,4 @@ api.interceptors.response.use(
 );
 
 export default api;
+
