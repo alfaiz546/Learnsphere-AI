@@ -36,6 +36,18 @@ def get_all_subjects(db: Session, exam_slug: str = None) -> list:
 
     subjects = query.order_by(Subject.display_order).all()
 
+    # MVP fallback: show General Learning courses for exams
+    # that do not yet have their own seeded subjects.
+    if not subjects and exam_slug in ("jee", "neet"):
+        subjects = db.query(Subject).join(
+            ExamCategory,
+            Subject.exam_category_id == ExamCategory.id
+        ).filter(
+            ExamCategory.slug == "general-learning",
+            ExamCategory.is_active == True,
+            Subject.is_active == True
+        ).order_by(Subject.display_order).all()
+
     result = []
     for s in subjects:
         course_count = db.query(Course).filter(
