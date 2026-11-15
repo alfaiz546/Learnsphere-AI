@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 from app.models.user import StudentProfile
 from app.models.gamification import Achievement, StudentAchievement, XPTransaction
@@ -10,7 +11,9 @@ logger = logging.getLogger(__name__)
 def award_xp(db: Session, student_id, amount: int, reason: str, reference_id=None):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == student_id).first()
     if not profile:
-        return
+        profile = StudentProfile(user_id=student_id)
+        db.add(profile)
+        db.flush()
     profile.xp_total += amount
     tx = XPTransaction(student_id=student_id, amount=amount, reason=reason, reference_id=reference_id)
     db.add(tx)
@@ -20,8 +23,10 @@ def award_xp(db: Session, student_id, amount: int, reason: str, reference_id=Non
 def update_streak(db: Session, student_id):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == student_id).first()
     if not profile:
-        return
-    today = date.today()
+        profile = StudentProfile(user_id=student_id)
+        db.add(profile)
+        db.flush()
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     if profile.last_active_date == today:
         return
     if profile.last_active_date and (today - profile.last_active_date).days == 1:
