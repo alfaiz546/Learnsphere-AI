@@ -1,5 +1,6 @@
 from app.database.base import Base, SessionLocal
 from app.models import *
+from app.models.exam_category import ExamCategory
 from app.core.security import hash_password
 import json, logging
 from sqlalchemy import text
@@ -18,10 +19,22 @@ def init_db():
     Base.metadata.create_all(bind=db_engine)
     db = SessionLocal()
     try:
+        categories = _ensure_exam_categories(db)
+
         if db.query(Subject).count() > 0:
-            logger.info("Database already seeded")
+            general_category = categories["general-learning"]
+            subjects = db.query(Subject).filter(
+                Subject.exam_category_id.is_(None)
+            ).all()
+
+            for subject in subjects:
+                subject.exam_category_id = general_category.id
+
+            db.commit()
+            logger.info("Database already seeded; exam categories verified")
             return
-        _seed_all(db)
+
+        _seed_all(db, categories)
         logger.info("Database seeded successfully")
     except Exception as e:
         logger.error(f"Seeding failed: {e}")
@@ -30,7 +43,58 @@ def init_db():
     finally:
         db.close()
 
-def _seed_all(db):
+def _ensure_exam_categories(db):
+    categories_data = [
+        {
+            "name": "General Learning",
+            "slug": "general-learning",
+            "description": "Explore general learning subjects",
+            "order": 1,
+        },
+        {
+            "name": "IIT JEE",
+            "slug": "jee",
+            "description": "Prepare for IIT JEE",
+            "order": 2,
+        },
+        {
+            "name": "NEET UG",
+            "slug": "neet",
+            "description": "Prepare for NEET UG",
+            "order": 3,
+        },
+    ]
+
+    categories = {}
+
+    for item in categories_data:
+        category = db.query(ExamCategory).filter(
+            ExamCategory.slug == item["slug"]
+        ).first()
+
+        if category is None:
+            category = ExamCategory(
+                name=item["name"],
+                slug=item["slug"],
+                description=item["description"],
+                display_order=item["order"],
+                is_active=True,
+            )
+            db.add(category)
+            db.flush()
+        else:
+            category.name = item["name"]
+            category.description = item["description"]
+            category.display_order = item["order"]
+            category.is_active = True
+
+        categories[item["slug"]] = category
+
+    db.flush()
+    return categories
+
+
+def _seed_all(db, categories):
     admin = User(
         email="admin@learnsphere.ai",
         username="admin",
@@ -53,7 +117,8 @@ def _seed_all(db):
     subjects = {}
     for sd in subjects_data:
         s = Subject(name=sd["name"], slug=sd["slug"], description=sd["description"],
-                    icon=sd["icon"], color=sd["color"], display_order=sd["order"])
+                    icon=sd["icon"], color=sd["color"], display_order=sd["order"],
+                    exam_category_id=categories["general-learning"].id)
         db.add(s)
         db.flush()
         subjects[sd["slug"]] = s
