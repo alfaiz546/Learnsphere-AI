@@ -19,6 +19,26 @@ from app.services.progress_service import get_topic_analysis
 
 logger = logging.getLogger(__name__)
 
+
+def _is_gemini_quota_error(error: Exception) -> bool:
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        status_code = getattr(error, "code", None)
+    if callable(status_code):
+        try:
+            status_code = status_code()
+        except Exception:
+            pass
+
+    message = str(error).lower()
+    return (
+        status_code == 429
+        or (
+            "429" in message
+            and ("quota" in message or "resource_exhausted" in message)
+        )
+    )
+
 class AIAgentOrchestrator:
     def __init__(self, db: Session, student_id: uuid.UUID):
         self.db = db
@@ -246,7 +266,27 @@ class AIAgentOrchestrator:
             except Exception as e:
                 # Detect HTTP status if available (google.api_core.exceptions.GoogleAPIError)
                 status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
-                if status_code == 503:
+                if _is_gemini_quota_error(e):
+                    friendly_msg = (
+                        "Our AI Tutor has temporarily reached its usage limit. "
+                        "Please try again later. Your learning progress is safe."
+                    )
+                    logger.warning("Gemini quota exceeded; no retry will be attempted.")
+                    self.persistence.fail_turn(
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        idempotency_record_id=idempotency_record_id,
+                        error_code="GEMINI_QUOTA_EXCEEDED",
+                        error_message=error_message,
+                    )
+                    return {
+                        "response": friendly_msg,
+                        "tools_used": tools_used,
+                        "conversation_id": str(conversation_id),
+                        "turn_id": str(turn_id),
+                        "error": "AI quota exceeded",
+                    }
+                elif status_code == 503:
                     attempt += 1
                     if attempt >= max_retries:
                         # All retries exhausted – return a friendly placeholder response
@@ -388,6 +428,13 @@ class AIAgentOrchestrator:
             logger.error(f"Agent turn exception: {e}")
             error_code = type(e).__name__
             error_message = str(e)
+            quota_error = _is_gemini_quota_error(e)
+            friendly_response = (
+                "Our AI Tutor has temporarily reached its usage limit. "
+                "Please try again later. Your learning progress is safe."
+                if quota_error
+                else f"I encountered an error processing your request: {error_message}"
+            )
 
             # Transactional Turn Failure
             self.persistence.fail_turn(
@@ -399,11 +446,11 @@ class AIAgentOrchestrator:
             )
 
             return {
-                "response": f"I encountered an error processing your request: {error_message}",
+                "response": friendly_response,
                 "tools_used": tools_used,
                 "conversation_id": str(conversation_id),
                 "turn_id": str(turn_id),
-                "error": error_message
+                "error": "AI quota exceeded" if quota_error else error_message
             }
 
     def _build_system_prompt(self, context: Optional[Dict] = None, prior_messages: Optional[List[AIMessage]] = None) -> str:

@@ -46,4 +46,17 @@ Respond in a warm, encouraging, conversational tone."""
             "has_context": bool(question_id or student_misconception)
         }
     except Exception as e:
-        return {"error": f"AI explanation failed: {str(e)}", "explanation": None}
+        status_code = getattr(e, "status_code", None)
+        if status_code is None:
+            status_code = getattr(e, "code", None)
+        message = str(e).lower()
+
+        if status_code == 429 or (
+            "429" in message and ("quota" in message or "resource_exhausted" in message)
+        ):
+            return {
+                "error": "AI usage limit reached. Please try again later.",
+                "explanation": "Our AI Tutor has temporarily reached its usage limit. Your learning progress is safe. Please try again later."
+            }
+
+        return {"error": "AI explanation is temporarily unavailable. Please try again.", "explanation": None}
