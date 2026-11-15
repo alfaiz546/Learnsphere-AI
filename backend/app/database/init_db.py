@@ -2,6 +2,7 @@ from app.database.base import Base, SessionLocal
 from app.models import *
 from app.core.security import hash_password
 import json, logging
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,9 @@ def init_db():
     if db_engine.dialect.name == "sqlite":
         for _table in Base.metadata.tables.values():
             _table.schema = None
+    if db_engine.dialect.name == "postgresql":
+        with db_engine.begin() as conn:
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth_security"))
     Base.metadata.create_all(bind=db_engine)
     db = SessionLocal()
     try:
