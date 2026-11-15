@@ -277,7 +277,7 @@ class AIAgentOrchestrator:
                         turn_id=turn_id,
                         idempotency_record_id=idempotency_record_id,
                         error_code="GEMINI_QUOTA_EXCEEDED",
-                        error_message=error_message,
+                        error_message=str(e),
                     )
                     return {
                         "response": friendly_msg,
