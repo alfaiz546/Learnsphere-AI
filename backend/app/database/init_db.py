@@ -30,6 +30,7 @@ def init_db():
             for subject in subjects:
                 subject.exam_category_id = general_category.id
 
+            _seed_neet_biology(db, categories)
             db.commit()
             logger.info("Database already seeded; exam categories verified")
             return
@@ -127,6 +128,7 @@ def _seed_all(db, categories):
     _seed_science(db, subjects["science"])
     _seed_cs(db, subjects["computer-science"])
     _seed_logic(db, subjects["logical-reasoning"])
+    _seed_neet_biology(db, categories)
     
     achievements_data = [
         {"name": "First Step", "description": "Complete your first lesson", "icon": "🎯", "xp": 50, "criteria": {"type": "first_lesson"}},
@@ -140,6 +142,106 @@ def _seed_all(db, categories):
         db.add(a)
     
     db.commit()
+
+
+
+def _seed_neet_biology(db, categories):
+    """Idempotently seed NEET Botany and Zoology courses."""
+    neet_id = categories["neet"].id
+
+    items = [
+        {
+            "subject": "Botany",
+            "subject_slug": "botany",
+            "course": "Botany: Plant Biology",
+            "course_slug": "neet-botany",
+            "description": "NEET Botany: plant diversity, plant physiology, genetics and ecology.",
+            "module": "Foundations of Botany",
+            "lesson": "Introduction to Plant Kingdom",
+            "content": "Study plant classification, major plant groups, their features and life cycles.",
+            "color": "#16a34a",
+            "order": 10,
+        },
+        {
+            "subject": "Zoology",
+            "subject_slug": "zoology",
+            "course": "Zoology: Animal Biology",
+            "course_slug": "neet-zoology",
+            "description": "NEET Zoology: animal diversity, human physiology, reproduction and health.",
+            "module": "Foundations of Zoology",
+            "lesson": "Introduction to Animal Kingdom",
+            "content": "Study animal classification, body organisation and important characteristics of animal groups.",
+            "color": "#0891b2",
+            "order": 11,
+        },
+    ]
+
+    for item in items:
+        subject = db.query(Subject).filter(
+            Subject.slug == item["subject_slug"]
+        ).first()
+
+        if subject is None:
+            subject = Subject(
+                name=item["subject"],
+                slug=item["subject_slug"],
+                description="NEET UG " + item["subject"] + " subject",
+                icon="book-open",
+                color=item["color"],
+                display_order=item["order"],
+                exam_category_id=neet_id,
+            )
+            db.add(subject)
+            db.flush()
+        else:
+            subject.exam_category_id = neet_id
+            subject.is_active = True
+
+        course = db.query(Course).filter(
+            Course.slug == item["course_slug"]
+        ).first()
+
+        if course is None:
+            course = Course(
+                subject_id=subject.id,
+                title=item["course"],
+                slug=item["course_slug"],
+                description=item["description"],
+                difficulty="beginner",
+                estimated_hours=20.0,
+                thumbnail_color=item["color"],
+                is_published=True,
+            )
+            db.add(course)
+            db.flush()
+
+        if not db.query(Module).filter(
+            Module.course_id == course.id
+        ).first():
+            module = Module(
+                course_id=course.id,
+                title=item["module"],
+                description=item["description"],
+                display_order=1,
+            )
+            db.add(module)
+            db.flush()
+
+            lesson = Lesson(
+                module_id=module.id,
+                title=item["lesson"],
+                description=item["description"],
+                lesson_type="concept",
+                estimated_minutes=20,
+                display_order=1,
+                content=json.dumps({
+                    "blocks": [
+                        {"type": "text", "content": item["content"]}
+                    ]
+                }),
+            )
+            db.add(lesson)
+
 
 def _seed_math(db, subject):
     c1 = Course(subject_id=subject.id, title="Algebra Fundamentals", slug="algebra-fundamentals",
