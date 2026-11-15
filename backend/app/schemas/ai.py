@@ -52,7 +52,7 @@ class ConversationHistoryResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     conversation_id: Optional[str] = None
-    idempotency_key: str = Field(..., min_length=1, max_length=128)
+    idempotency_key: Optional[str] = Field(None, min_length=1, max_length=128)
     context: Optional[Dict[str, Any]] = None
 
 class ChatResponseData(BaseModel):

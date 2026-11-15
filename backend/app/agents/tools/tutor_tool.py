@@ -8,7 +8,7 @@ def get_tutor_explanation(db: Session, student_id: uuid.UUID, concept: str, ques
     client = get_genai_client()
     if not client:
         return {
-            "error": "GEMINI_API_KEY not configured. Add your API key in .env",
+            "error": "GROQ_API_KEY not configured. Add your API key in .env",
             "explanation": None
         }
     
@@ -37,7 +37,7 @@ Provide a clear, engaging explanation appropriate for a student learning this co
 Respond in a warm, encouraging, conversational tone."""
         
         response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
+            model=settings.GROQ_MODEL,
             contents=prompt
         )
         return {

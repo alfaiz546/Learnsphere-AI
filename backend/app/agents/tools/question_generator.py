@@ -6,7 +6,7 @@ from app.core.ai_client import get_genai_client
 def generate_questions(db: Session, student_id: uuid.UUID, subject_id: str = None, topic: str = "Math", difficulty: str = "beginner", count: int = 5) -> dict:
     client = get_genai_client()
     if not client:
-        return {"error": "GEMINI_API_KEY not configured", "questions": []}
+        return {"error": "GROQ_API_KEY not configured", "questions": []}
     
     try:
         prompt = f"""Generate {count} educational questions about "{topic}" at {difficulty} level.
@@ -30,7 +30,7 @@ Return ONLY valid JSON in this exact format:
 }}"""
         
         response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
+            model=settings.GROQ_MODEL,
             contents=prompt
         )
         text = response.text.strip()

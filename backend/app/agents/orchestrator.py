@@ -2,12 +2,9 @@ import logging
 import json
 import uuid
 import time
-from google.api_core import exceptions as genai_exceptions
-import grpc
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-import google.generativeai as genai
 from types import SimpleNamespace
 from app.agents.tool_registry import ToolRegistry
 from app.core.config import settings
@@ -20,7 +17,7 @@ from app.services.progress_service import get_topic_analysis
 logger = logging.getLogger(__name__)
 
 
-def _is_gemini_quota_error(error: Exception) -> bool:
+def _is_ai_rate_limit_error(error: Exception) -> bool:
     status_code = getattr(error, "status_code", None)
     if status_code is None:
         status_code = getattr(error, "code", None)
@@ -33,10 +30,10 @@ def _is_gemini_quota_error(error: Exception) -> bool:
     message = str(error).lower()
     return (
         status_code == 429
-        or (
-            "429" in message
-            and ("quota" in message or "resource_exhausted" in message)
-        )
+        or "rate limit" in message
+        or "rate_limit" in message
+        or "quota" in message
+        or "resource_exhausted" in message
     )
 
 class AIAgentOrchestrator:
@@ -60,7 +57,7 @@ class AIAgentOrchestrator:
         - Resolves or creates conversation
         - Initiates turn transactionally (allocating user sequence number)
         - Injects historical conversation context within budget
-        - Calls Gemini with tool schemas
+        - Calls the configured AI provider with tool schemas
         - Completes turn transactionally (allocating assistant sequence number)
         - On failure, marks turn failed without burning sequence numbers
 
@@ -161,19 +158,19 @@ class AIAgentOrchestrator:
         Core turn execution:
         - Checks GenAI client availability
         - Fetches prior conversation history within budget (excluding current turn)
-        - Executes Gemini chat session with tool calling
+        - Executes AI chat session with tool calling
         - Completes turn transactionally on success
         - Marks turn failed transactionally on exception
         """
-                # 3. Check GenAI client availability
+        # 3. Check AI client availability
         client = get_genai_client()
         if not client:
-            error_msg = "⚠️ LearnSphere AI Tutor is ready, but GEMINI_API_KEY is not configured yet. Please configure GEMINI_API_KEY in your backend/.env file to enable live AI responses."
+            error_msg = "⚠️ LearnSphere AI Tutor is ready, but GROQ_API_KEY is not configured yet. Please configure GROQ_API_KEY in your backend/.env file to enable live AI responses."
             self.persistence.fail_turn(
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 idempotency_record_id=idempotency_record_id,
-                error_code="GEMINI_API_KEY_MISSING",
+                error_code="GROQ_API_KEY_MISSING",
                 error_message=error_msg
             )
             return {
@@ -181,7 +178,7 @@ class AIAgentOrchestrator:
                 "tools_used": [],
                 "conversation_id": str(conversation_id),
                 "turn_id": str(turn_id),
-                "error": "GEMINI_API_KEY not configured",
+                "error": "GROQ_API_KEY not configured",
                 "is_placeholder": True,
             }
 
@@ -202,24 +199,24 @@ class AIAgentOrchestrator:
         tools_used = []
         final_response = ""
 
-        # 5. Gemini Generation & Tool Execution with retry on 503
+        # 5. AI Generation & Tool Execution with retry on 503
         max_retries = 3
         attempt = 0
         backoff = 0.5  # seconds
         while attempt < max_retries:
             try:
                 tool_schemas = self.tool_registry.get_tool_schemas()
-                gemini_tools = self._convert_to_gemini_tools(tool_schemas)
+                groq_tools = self._convert_to_groq_tools(tool_schemas)
 
                 config = SimpleNamespace(
                     system_instruction=system_prompt,
-                    tools=gemini_tools if gemini_tools else None,
+                    tools=groq_tools if groq_tools else None,
                     temperature=0.7
                 )
 
-                # Build multi-turn chat history for Gemini
+                # Build multi-turn chat history for the AI provider
                 chat = client.chats.create(
-                    model=settings.GEMINI_MODEL,
+                    model=settings.GROQ_MODEL,
                     config=config
                 )
 
@@ -238,10 +235,10 @@ class AIAgentOrchestrator:
                             tool_result = self.tool_registry.execute_tool(tool_name, tool_params)
                             tools_used.append(tool_name)
 
-                            tool_parts.append(types.Part.from_function_response(
-                                name=tool_name,
-                                response={"result": tool_result}
-                            ))
+                            tool_parts.append({
+                                "tool_call_id": fc.id,
+                                "content": json.dumps({"result": tool_result}, default=str)
+                            })
 
                         response = chat.send_message(tool_parts)
                         continue
@@ -264,19 +261,19 @@ class AIAgentOrchestrator:
                 return completion_data
 
             except Exception as e:
-                # Detect HTTP status if available (google.api_core.exceptions.GoogleAPIError)
+                # Detect HTTP status from the configured AI provider
                 status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
-                if _is_gemini_quota_error(e):
+                if _is_ai_rate_limit_error(e):
                     friendly_msg = (
                         "Our AI Tutor has temporarily reached its usage limit. "
                         "Please try again later. Your learning progress is safe."
                     )
-                    logger.warning("Gemini quota exceeded; no retry will be attempted.")
+                    logger.warning("AI rate limit reached; no retry will be attempted.")
                     self.persistence.fail_turn(
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         idempotency_record_id=idempotency_record_id,
-                        error_code="GEMINI_QUOTA_EXCEEDED",
+                        error_code="AI_RATE_LIMIT_EXCEEDED",
                         error_message=str(e),
                     )
                     return {
@@ -284,7 +281,7 @@ class AIAgentOrchestrator:
                         "tools_used": tools_used,
                         "conversation_id": str(conversation_id),
                         "turn_id": str(turn_id),
-                        "error": "AI quota exceeded",
+                        "error": "AI rate limit exceeded",
                     }
                 elif status_code == 503:
                     attempt += 1
@@ -295,7 +292,7 @@ class AIAgentOrchestrator:
                             conversation_id=conversation_id,
                             turn_id=turn_id,
                             idempotency_record_id=idempotency_record_id,
-                            error_code="GEMINI_SERVICE_UNAVAILABLE",
+                            error_code="AI_SERVICE_UNAVAILABLE",
                             error_message=friendly_msg,
                         )
                         return {
@@ -306,7 +303,7 @@ class AIAgentOrchestrator:
                             "error": "Service unavailable",
                         }
                     else:
-                        logger.warning(f"Gemini 503 encountered, retry {attempt}/{max_retries} after {backoff}s: {e}")
+                        logger.warning(f"AI service 503 encountered, retry {attempt}/{max_retries} after {backoff}s: {e}")
                         time.sleep(backoff)
                         backoff *= 2  # exponential backoff
                         continue
@@ -330,128 +327,6 @@ class AIAgentOrchestrator:
                         "error": error_message,
                     }
 
-        client = get_genai_client()
-        if not client:
-            error_msg = "⚠️ LearnSphere AI Tutor is ready, but GEMINI_API_KEY is not configured yet. Please configure GEMINI_API_KEY in your backend/.env file to enable live AI responses."
-            self.persistence.fail_turn(
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                idempotency_record_id=idempotency_record_id,
-                error_code="GEMINI_API_KEY_MISSING",
-                error_message=error_msg
-            )
-            return {
-                "response": error_msg,
-                "tools_used": [],
-                "conversation_id": str(conversation_id),
-                "turn_id": str(turn_id),
-                "error": "GEMINI_API_KEY not configured"
-            }
-
-        # 4. Fetch prior conversation history within budget (excluding current message)
-        prior_messages = (
-            self.db.query(AIMessage)
-            .filter(
-                AIMessage.conversation_id == conversation_id,
-                AIMessage.turn_id != turn_id  # Exclude current turn
-            )
-            .order_by(AIMessage.sequence_number.desc())
-            .limit(self.history_context_limit)
-            .all()
-        )
-        prior_messages.reverse()  # Chronological order
-
-        system_prompt = self._build_system_prompt(context, prior_messages)
-        tools_used = []
-        final_response = ""
-
-        # 5. Gemini Generation & Tool Execution
-        try:
-            tool_schemas = self.tool_registry.get_tool_schemas()
-            gemini_tools = self._convert_to_gemini_tools(tool_schemas)
-
-            config = SimpleNamespace(
-                system_instruction=system_prompt,
-                tools=gemini_tools if gemini_tools else None,
-                temperature=0.7
-            )
-
-            # Build multi-turn chat history for Gemini
-            chat = client.chats.create(
-                model=settings.GEMINI_MODEL,
-                config=config
-            )
-
-            response = chat.send_message(user_message)
-
-            iterations = 0
-            while iterations < self.max_iterations:
-                iterations += 1
-
-                if response.function_calls:
-                    tool_parts = []
-                    for fc in response.function_calls:
-                        tool_name = fc.name
-                        tool_params = dict(fc.args) if fc.args else {}
-
-                        logger.info(f"Agent executing tool: {tool_name} with params: {tool_params}")
-                        tool_result = self.tool_registry.execute_tool(tool_name, tool_params)
-                        tools_used.append(tool_name)
-
-                        tool_parts.append(types.Part.from_function_response(
-                            name=tool_name,
-                            response={"result": tool_result}
-                        ))
-
-                    response = chat.send_message(tool_parts)
-                    continue
-                else:
-                    final_response = response.text if response.text else "I've reviewed your request and provided guidance."
-                    break
-
-            if not final_response:
-                final_response = "I've processed your request. Please check the results."
-
-            # 6. Transactional Turn Completion
-            completion_data = self.persistence.complete_turn(
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                assistant_response_text=final_response,
-                idempotency_record_id=idempotency_record_id,
-                worker_token=worker_token,
-                tools_used=tools_used
-            )
-
-            return completion_data
-
-        except Exception as e:
-            logger.error(f"Agent turn exception: {e}")
-            error_code = type(e).__name__
-            error_message = str(e)
-            quota_error = _is_gemini_quota_error(e)
-            friendly_response = (
-                "Our AI Tutor has temporarily reached its usage limit. "
-                "Please try again later. Your learning progress is safe."
-                if quota_error
-                else f"I encountered an error processing your request: {error_message}"
-            )
-
-            # Transactional Turn Failure
-            self.persistence.fail_turn(
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                idempotency_record_id=idempotency_record_id,
-                error_code=error_code,
-                error_message=error_message
-            )
-
-            return {
-                "response": friendly_response,
-                "tools_used": tools_used,
-                "conversation_id": str(conversation_id),
-                "turn_id": str(turn_id),
-                "error": "AI quota exceeded" if quota_error else error_message
-            }
 
     def _build_system_prompt(self, context: Optional[Dict] = None, prior_messages: Optional[List[AIMessage]] = None) -> str:
         base = """You are LearnSphere AI Mentor, an autonomous educational tutor inspired by Brilliant.org's interactive, problem-solving-based learning experience.
@@ -517,30 +392,19 @@ Guidelines:
 
         return base
 
-    def _convert_to_gemini_tools(self, schemas: list) -> list:
-        try:
-            function_declarations = []
-            for schema in schemas:
-                props = {}
-                for k, v in schema.get("parameters", {}).get("properties", {}).items():
-                    prop_type = v.get("type", "string").upper()
-                    props[k] = {
-                        "type": prop_type,
-                        "description": v.get("description", "")
-                    }
-                fd = types.FunctionDeclaration(
-                    name=schema["name"],
-                    description=schema["description"],
-                    parameters={
-                        "type": "OBJECT",
-                        "properties": props,
-                        "required": schema.get("parameters", {}).get("required", [])
-                    }
-                )
-                function_declarations.append(fd)
-            if function_declarations:
-                return [types.Tool(function_declarations=function_declarations)]
-            return []
-        except Exception as e:
-            logger.warning(f"Could not build Gemini tools: {e}")
-            return []
+    def _convert_to_groq_tools(self, schemas: list) -> list:
+        """Convert tool schemas to Groq's OpenAI-compatible format."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": schema["name"],
+                    "description": schema["description"],
+                    "parameters": schema.get("parameters", {
+                        "type": "object",
+                        "properties": {}
+                    })
+                }
+            }
+            for schema in schemas
+        ]

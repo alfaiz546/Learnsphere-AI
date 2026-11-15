@@ -48,8 +48,13 @@ def test_ai_hint_endpoint(client, db_session):
         "username": "hintuser",
         "password": "Password123!"
     })
-    token = reg.json()["data"]["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    token = reg.cookies.get("access_token")
+    assert token is not None, "Registration did not set access_token cookie"
+    csrf_token = reg.cookies.get("csrf_token")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-CSRF-Token": csrf_token
+    }
     
     # Request hint
     import uuid

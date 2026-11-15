@@ -1,100 +1,186 @@
+
+import json
 import logging
-from typing import Optional
+from types import SimpleNamespace
+
+import httpx
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Attempt to import the official Google Generative AI library.
-try:
-    import google.generativeai as genai
-except Exception as e:  # pragma: no cover – import may fail in test environments.
-    logger.warning(f"google.generativeai import failed: {e}. Falling back to a mock client.")
-    genai = None
 
-# Simple mock implementation that satisfies the minimal interface used by the orchestrator.
-class _MockChat:
-    def send_message(self, *args, **kwargs):
-        class _Resp:
-            text = "Mock AI response"
-            function_calls = None
-        return _Resp()
+class GroqAPIError(Exception):
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = status_code
 
-class _RealGenAIClient:
-    """Adapter for the real google.generativeai SDK to match the expected interface.
-    Provides a ``chats.create`` method that returns a chat session with ``send_message``.
-    ``config`` is a ``types.GenerateContentConfig`` instance; we extract the system instruction
-    and ignore tools/temperature for now (tools are not required for the basic verification).
-    """
-    def __init__(self, *args, **kwargs):
-        pass
 
-    class _Chats:
-        def __init__(self, genai_module):
-            self.genai = genai_module
+class _GroqModels:
+    def generate_content(self, *, model=None, contents, **kwargs):
+        response = self._request(
+            model=model or settings.GROQ_MODEL,
+            messages=[{"role": "user", "content": str(contents)}],
+        )
+        return SimpleNamespace(text=response.get("content") or "")
 
-        def create(self, *, model: str, config=None):
-            # Extract system instruction if provided
-            system_instruction = None
-            if config is not None:
-                system_instruction = getattr(config, "system_instruction", None)
-            # Initialize the GenerativeModel with optional system instruction
-            generative_model = self.genai.GenerativeModel(
-                model_name=model,
-                system_instruction=system_instruction,
+    @staticmethod
+    def _request(model, messages):
+        if not settings.GROQ_API_KEY:
+            raise GroqAPIError("GROQ_API_KEY is not configured.")
+
+        try:
+            response = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                },
+                timeout=settings.AI_TIMEOUT_SECONDS,
             )
-            chat = generative_model.start_chat()
-            return _RealGenAIClient._ChatWrapper(chat)
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]
 
-    @property
-    def chats(self):
-        return _RealGenAIClient._Chats(genai)
-
-    class _ChatWrapper:
-        def __init__(self, chat_session):
-            self.chat = chat_session
-
-        def send_message(self, content):
-            # Content may be a string or a list of Parts; convert to a string for simplicity
-            if isinstance(content, list):
-                # Convert each Part to its string representation
-                try:
-                    content_str = "".join(str(part) for part in content)
-                except Exception:
-                    content_str = " ".join(str(part) for part in content)
-            else:
-                content_str = content
-            response = self.chat.send_message(content_str)
-            # Wrap response to expose .text and .function_calls attributes expected by orchestrator
-            class _ResponseWrapper:
-                def __init__(self, resp):
-                    self.text = getattr(resp, "text", None)
-                    self.function_calls = getattr(resp, "function_calls", None)
-            return _ResponseWrapper(response)
-
-
-
-_genai_client: Optional[object] = None
-
-def get_genai_client() -> Optional[object]:
-    """Return a singleton instance of the Google Generative AI client (or a mock).
-
-    The orchestrator only needs a ``chats.create`` method that returns an object with a
-    ``send_message`` method. If the real library cannot be imported or the API key is not
-    configured, a lightweight mock client is provided so that the rest of the backend can
-    operate without raising import errors.
-    """
-    global _genai_client
-    # If a real API key is provided and the library is available, attempt to configure it.
-    if settings.GEMINI_API_KEY and genai is not None:
-        if _genai_client is None:
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
             try:
-                genai.configure(api_key=settings.GEMINI_API_KEY)
-                _genai_client = _RealGenAIClient()
-            except Exception as e:
-                logger.error(f"Failed to initialize Google GenerativeAI client: {e}")
-                _genai_client = _MockGenAIClient()
-        return _genai_client
-    # Fallback to mock client when no key or library unavailable.
-    if _genai_client is None:
-        _genai_client = _MockGenAIClient()
-    return _genai_client
+                detail = exc.response.json().get("error", {}).get("message", "")
+            except Exception:
+                detail = exc.response.text[:500]
+            raise GroqAPIError(
+                detail or f"Groq API returned HTTP {status}",
+                status,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise GroqAPIError(f"Could not connect to Groq: {exc}") from exc
+
+
+class _GroqChat:
+    def __init__(self, model, config):
+        self.model = model or settings.GROQ_MODEL
+        self.messages = []
+        self.tools = getattr(config, "tools", None) if config else None
+
+        system_instruction = (
+            getattr(config, "system_instruction", None) if config else None
+        )
+        if system_instruction:
+            self.messages.append({
+                "role": "system",
+                "content": system_instruction,
+            })
+
+    def send_message(self, content):
+        if isinstance(content, str):
+            self.messages.append({"role": "user", "content": content})
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("tool_call_id"):
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": item["tool_call_id"],
+                        "content": str(item.get("content", "")),
+                    })
+                else:
+                    raise ValueError("Unsupported tool response format.")
+        else:
+            raise ValueError("Message must be text or a list of tool responses.")
+
+        payload = {
+            "model": self.model,
+            "messages": self.messages,
+            "temperature": 0.7,
+        }
+        if self.tools:
+            payload["tools"] = self.tools
+            payload["tool_choice"] = "auto"
+
+        if not settings.GROQ_API_KEY:
+            raise GroqAPIError("GROQ_API_KEY is not configured.")
+
+        try:
+            response = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=settings.AI_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            data = response.json()
+            message = data["choices"][0]["message"]
+
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            try:
+                detail = exc.response.json().get("error", {}).get("message", "")
+            except Exception:
+                detail = exc.response.text[:500]
+            raise GroqAPIError(
+                detail or f"Groq API returned HTTP {status}",
+                status,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise GroqAPIError(f"Could not connect to Groq: {exc}") from exc
+
+        self.messages.append(message)
+
+        function_calls = []
+        for call in message.get("tool_calls") or []:
+            function = call.get("function", {})
+            try:
+                args = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+
+            function_calls.append(SimpleNamespace(
+                id=call.get("id"),
+                name=function.get("name"),
+                args=args,
+            ))
+
+        return SimpleNamespace(
+            text=message.get("content") or "",
+            function_calls=function_calls or None,
+        )
+
+
+class _GroqChats:
+    def create(self, *, model=None, config=None):
+        return _GroqChat(model, config)
+
+
+class _GroqClient:
+    def __init__(self):
+        self.models = _GroqModels()
+        self.chats = _GroqChats()
+
+
+_groq_client = None
+
+
+def get_genai_client():
+    """Return the configured Groq client, or None if its API key is missing."""
+    global _groq_client
+
+    if settings.AI_PROVIDER.lower() != "groq":
+        logger.error("Unsupported AI provider: %s", settings.AI_PROVIDER)
+        return None
+
+    if not settings.GROQ_API_KEY:
+        logger.warning("GROQ_API_KEY is not configured.")
+        return None
+
+    if _groq_client is None:
+        _groq_client = _GroqClient()
+
+    return _groq_client

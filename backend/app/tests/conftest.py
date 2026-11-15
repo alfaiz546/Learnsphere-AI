@@ -18,16 +18,20 @@ def test_db():
         for _table in Base.metadata.tables.values():
             _table.schema = None
     Base.metadata.create_all(bind=test_engine)
-    # Seed the test database using the same logic as init_db
-    from app.database.init_db import init_db as init_db_func
-    # Temporarily replace the global engine with the test engine for seeding
-    original_engine = global_engine
+    # Seed only the test database, never the configured application database.
+    import app.database.base as base_mod
+    import app.database.init_db as init_db_mod
+
+    original_engine = base_mod.engine
+    original_session_local = init_db_mod.SessionLocal
+
     try:
-        import app.database.base as base_mod
         base_mod.engine = test_engine
-        init_db_func()
+        init_db_mod.SessionLocal = TestingSessionLocal
+        init_db_mod.init_db()
     finally:
         base_mod.engine = original_engine
+        init_db_mod.SessionLocal = original_session_local
     yield
     Base.metadata.drop_all(bind=test_engine)
 

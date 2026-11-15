@@ -1,7 +1,7 @@
 """
 Phase 2.5 Backend Tests: AI Chat Session Persistence
 Tests all core workflows with SQLite in-memory test DB.
-Gemini calls are mocked; no live API calls.
+AI provider calls are mocked; no live API calls.
 """
 import uuid
 import secrets
@@ -172,7 +172,7 @@ class TestConversationCRUD:
         tok_res = client.post(f"/api/ai/conversations/{conv_id}/deletion-token", headers=hdrs)
         assert tok_res.status_code == 200
         token_data = tok_res.json()["data"]
-        del_res = client.delete(f"/api/ai/conversations/{conv_id}", json=token_data, headers=hdrs)
+        del_res = client.request("DELETE", f"/api/ai/conversations/{conv_id}", json=token_data, headers=hdrs)
         assert del_res.status_code == 200
         list_res = client.get("/api/ai/conversations", headers=hdrs)
         ids = [c["id"] for c in list_res.json()["data"]["items"]]
@@ -188,12 +188,12 @@ class TestConversationCRUD:
         tok_res_b = client.post(f"/api/ai/conversations/{conv_id}/deletion-token", headers=hdrs_b)
         assert tok_res_b.status_code == 404
         # Student B cannot delete without a valid token
-        res_b = client.delete(f"/api/ai/conversations/{conv_id}", json={}, headers=hdrs_b)
+        res_b = client.request("DELETE", f"/api/ai/conversations/{conv_id}", json={}, headers=hdrs_b)
         assert res_b.status_code in (400, 404, 422)
 
 
 # ---------------------------------------------------------------------------
-# 2. AI Chat Persistence with Mocked Gemini
+# 2. AI Chat Persistence with Mocked AI Provider
 # ---------------------------------------------------------------------------
 class TestChatPersistence:
     @patch("app.agents.orchestrator.get_genai_client")
@@ -213,7 +213,8 @@ class TestChatPersistence:
         hdrs = _register_and_login(client, "chat1")
         res = client.post("/api/ai/chat", json={
             "message": "Explain recursion",
-            "context": {"subject": "CS"}
+            "context": {"subject": "CS"},
+            "idempotency_key": f"test-{uuid.uuid4()}"
         }, headers=hdrs)
         assert res.status_code == 200
         data = res.json()["data"]
@@ -245,38 +246,39 @@ class TestChatPersistence:
 
         hdrs = _register_and_login(client, "chat_cont")
         # First message
-        res1 = client.post("/api/ai/chat", json={"message": "Tell me about trees"}, headers=hdrs)
+        res1 = client.post("/api/ai/chat", json={"message": "Tell me about trees", "idempotency_key": f"test-{uuid.uuid4()}"}, headers=hdrs)
         assert res1.status_code == 200
         conv_id = res1.json()["data"]["conversation_id"]
 
         # Second message in same conversation
         res2 = client.post("/api/ai/chat", json={
             "message": "And binary search trees?",
-            "conversation_id": conv_id
+            "conversation_id": conv_id,
+            "idempotency_key": f"test-{uuid.uuid4()}"
         }, headers=hdrs)
         assert res2.status_code == 200
         assert res2.json()["data"]["conversation_id"] == conv_id
 
-    def test_chat_no_gemini_key_returns_graceful_error(self, client, db):
-        """When GEMINI_API_KEY is absent, chat returns a helpful error without crashing."""
+    def test_chat_no_groq_key_returns_graceful_error(self, client, db):
+        """When GROQ_API_KEY is absent, chat returns a helpful error without crashing."""
         with patch("app.agents.orchestrator.get_genai_client", return_value=None):
             hdrs = _register_and_login(client, "nokey")
-            res = client.post("/api/ai/chat", json={"message": "Hello"}, headers=hdrs)
+            res = client.post("/api/ai/chat", json={"message": "Hello", "idempotency_key": f"test-{uuid.uuid4()}"}, headers=hdrs)
             assert res.status_code == 200
             data = res.json()["data"]
-            assert "GEMINI_API_KEY" in data.get("response", "") or "error" in data
+            assert "GROQ_API_KEY" in data.get("response", "") or "error" in data
 
     @patch("app.agents.orchestrator.get_genai_client")
-    def test_chat_gemini_timeout_marks_turn_failed(self, mock_genai, client, db):
-        """When Gemini raises an exception, the turn is marked failed; no assistant message is stored."""
+    def test_chat_ai_timeout_marks_turn_failed(self, mock_genai, client, db):
+        """When The AI provider raises an exception, the turn is marked failed; no assistant message is stored."""
         mock_client = MagicMock()
         mock_chat = MagicMock()
-        mock_chat.send_message.side_effect = TimeoutError("Gemini request timed out")
+        mock_chat.send_message.side_effect = TimeoutError("AI request timed out")
         mock_client.chats.create.return_value = mock_chat
         mock_genai.return_value = mock_client
 
         hdrs = _register_and_login(client, "timeout")
-        res = client.post("/api/ai/chat", json={"message": "Hello"}, headers=hdrs)
+        res = client.post("/api/ai/chat", json={"message": "Hello", "idempotency_key": f"test-{uuid.uuid4()}"}, headers=hdrs)
         # Should not crash; returns error info
         assert res.status_code == 200
         data = res.json()["data"]
@@ -741,8 +743,11 @@ class TestSafeDeletion:
         chat_res = client.post("/api/ai/chat", json={"message": "Turn 1", "idempotency_key": f"seq-{uuid.uuid4()}"}, headers=hdrs)
         conv_id = chat_res.json()["data"]["conversation_id"]
 
-        # Delete conversation
-        del_res = client.delete(f"/api/ai/conversations/{conv_id}", headers=hdrs)
+        # Generate deletion token and delete conversation
+        tok_res = client.post(f"/api/ai/conversations/{conv_id}/deletion-token", headers=hdrs)
+        assert tok_res.status_code == 200
+        token_data = tok_res.json()["data"]
+        del_res = client.request("DELETE", f"/api/ai/conversations/{conv_id}", json=token_data, headers=hdrs)
         assert del_res.status_code == 200
 
         # Verify not found
@@ -756,7 +761,10 @@ class TestSafeDeletion:
             chat_res = client.post("/api/ai/chat", json={"message": "Turn 1", "idempotency_key": f"seq-{uuid.uuid4()}"}, headers=hdrs)
             conv_id = chat_res.json()["data"]["conversation_id"]
 
-        del_res = client.delete(f"/api/ai/conversations/{conv_id}", headers=hdrs)
+        tok_res = client.post(f"/api/ai/conversations/{conv_id}/deletion-token", headers=hdrs)
+        assert tok_res.status_code == 200
+        token_data = tok_res.json()["data"]
+        del_res = client.request("DELETE", f"/api/ai/conversations/{conv_id}", json=token_data, headers=hdrs)
         assert del_res.status_code == 200
 
     def test_delete_conversation_with_generating_turn(self, client, db):

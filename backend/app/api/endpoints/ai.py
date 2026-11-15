@@ -358,7 +358,7 @@ def create_study_plan(request: StudyPlanRequest, db: Session = Depends(get_db), 
             try:
                 prompt = f"Provide a motivating 2-sentence summary for a student working toward: {request.goal}"
                 res = client.models.generate_content(
-                    model=settings.GEMINI_MODEL,
+                    model=settings.GROQ_MODEL,
                     contents=prompt
                 )
                 summary_text = res.text
