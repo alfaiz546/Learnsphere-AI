@@ -121,3 +121,92 @@ The application will launch on `http://localhost:5173`.
   - Password: `Admin123!`
 - **Student:**
   - Create any new student account via the `/register` page with instant access.
+  - # 👥 Team Members & Contributions
+
+## Our Team — LearnSphere-AI
+
+LearnSphere-AI was developed through the collective effort, collaboration, and dedication of four team members. Every member played an important role in bringing this project to life.
+
+We worked together throughout the development process, sharing ideas, solving problems, implementing features, testing functionality, and improving the overall platform.
+
+### 🚀 Team Members
+
+| No. | Name | GitHub |
+|---|---|---|
+| 1 | **Mahammadrajin Shaikh** (Team Leader) | [@instinct-coder1](https://github.com/instinct-coder1) |
+| 2 | **Alfaiz Khatik** | [@alfaiz546](https://github.com/alfaiz546) |
+| 3 | **Mohd Faiz Ansari** | [@MOHDFAIZ03](https://github.com/MOHDFAIZ03) |
+| 4 | **Nit Ahangare** | [@nit-2520](https://github.com/nit-2520) |
+
+---
+
+## 💻 Individual Roles & Contributions
+
+### 1. Mahammadrajin Shaikh — Team Leader
+**GitHub:** [@instinct-coder1](https://github.com/instinct-coder1)
+
+**Responsibilities:**
+- Led the project idea, brainstorming, and overall planning.
+- Contributed to frontend development using React.
+- Worked on UI/UX design and website pages.
+- Participated in testing, debugging, and fixing errors.
+- Managed GitHub activities and repository integration.
+- Coordinated deployment and overall project integration.
+
+### 2. Alfaiz Khatik — Backend & AI Development
+**GitHub:** [@alfaiz546](https://github.com/alfaiz546)
+
+**Responsibilities:**
+- Worked on backend development using Python and FastAPI.
+- Contributed to API development and backend functionality.
+- Integrated Google's Gemini AI into the platform.
+- Worked on AI Mentor functionality.
+- Contributed to AI agent development and integration.
+
+### 3. Mohd Faiz Ansari — Database & Documentation
+**GitHub:** [@MOHDFAIZ03](https://github.com/MOHDFAIZ03)
+
+**Responsibilities:**
+- Contributed to database design and integration.
+- Worked on organizing and documenting project information.
+- Prepared project presentation materials.
+- Contributed to PPT preparation and presentation activities.
+
+### 4. Nit Ahangare — Learning Features & User Management
+**GitHub:** [@nit-2520](https://github.com/nit-2520)
+
+**Responsibilities:**
+- Contributed to authentication and user management.
+- Worked on personalized study plan functionality.
+- Contributed to learning-related features.
+- Worked on progress tracking and assessment functionality.
+- Participated in PPT preparation and project documentation.
+- Assisted with deployment and project integration.
+
+---
+
+## 🤝 Equal Team Contribution & GitHub Commit Clarification
+
+**LearnSphere-AI is a collaborative project developed by all four team members.**
+
+We would like to clarify that the project was not developed independently by a single team member.
+
+During the hackathon, our team worked together using a single laptop/device for project development. Due to this shared development environment, GitHub commits and code pushes were primarily performed through one team member's GitHub account.
+
+Consequently, the GitHub commit history may not accurately represent the individual contributions of every team member.
+
+All four members actively participated in the development process through their respective responsibilities, collaborative discussions, implementation, problem-solving, testing, documentation, and project improvement.
+
+We believe that teamwork is not measured only by the number of GitHub commits, but also by the collective effort, ideas, responsibilities, and dedication contributed by every team member.
+
+**LearnSphere-AI represents the combined work and equal team effort of all four members.**
+
+---
+
+## 🏆 Acknowledgment
+
+We are proud to have built LearnSphere-AI together. This experience helped us improve our technical skills, collaboration, problem-solving abilities, and understanding of real-world software development.
+
+**Four Members. One Vision. One Team. One Project.**
+
+Thank you for exploring LearnSphere-AI!
